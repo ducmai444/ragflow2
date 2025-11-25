@@ -199,5 +199,25 @@ class TextDetector:
             }
         self.preprocess_op = create_operators(pre_process_list)
 
+    def clip_det_res(self, points, img_height, img_width):
+        for pno in range(points.shape[0]):
+            points[pno, 0] = int(min(max(points[pno, 0], 0), img_width - 1))
+            points[pno, 1] = int(min(max(points[pno, 1], 0), img_height - 1))
+        return points
+
     def order_points_clockwise(self, pts):
-        
+        rect = np.zeros((4,2), dtype="float32")
+        s = pts.sum(axis=1)
+        rect[0] = pts[np.argmin(s)]
+        rect[2] = pts[np.argmax(s)]
+        tmp = np.delete(pts, (np.argmin(s), np.argmax(s)), axis=0)
+        diff = np.diff(np.array(tmp), axis=1)
+        rect[1] = tmp[np.argmin(diff)]
+        rect[3] = tmp[np.argmax(diff)]
+        return rect
+
+    def filter_tag_det_res(self, dt_boxes, image_shape):
+        img_height, img_width = image_shape[0:2]
+        dt_boxes_new = []
+        for box in dt_boxes:
+            
