@@ -1,0 +1,206 @@
+1. deepdoc/parser/pdf_parser.py: __images__,
+ __ocr, _layouts_rec, _table_transformer_job, _text_merge,\
+ _concat_downward, _extract_table_figure, __call__
+
+2. deepdoc/vision/ocr.py: load_model, TextDetector, TextRecognizer,
+ OCR.get_rotate_crop_image, OCR.detect/recognize_v
+
+3. deepdoc/vision/layout_recognizer.py: LayoutRecognizer.__call__,
+ LayoutRecognizer4YOLOv10.preprocess/postprocess.
+
+4. deepdoc/vision/recognizer.py: Recognizer.__call__/preprocess/postprocess -> abstraction ONNX
+
+5. deepdoc/vision/table_structure_recognizer.py: __call__, construct_table.
+
+Input (PDF / Image / DOCX / PPT / HTML / TXT)
+  ├─ If PDF/Image:
+  │   ├─ Render page images (+ dedupe chars from PDF if available)
+  │   ├─ OCR:
+  │   │   ├─ TextDetector (DB ONNX) → boxes
+  │   │   └─ TextRecognizer (CTC ONNX) → text per box (rotate-crop)
+  │   ├─ Layout Detection (YOLOv10 ONNX) → layout types per region
+  │   ├─ Table Structure (TSR ONNX) → rows/columns/headers/spanning
+  │   ├─ Merge text blocks (rules + XGBoost concat)
+  │   ├─ Extract Figures/Tables:
+  │   │   ├─ Crop regions (+ captions)
+  │   │   └─ Tables → HTML or descriptive text
+  │   └─ Output: text (with position tags) + tables/figures (+ positions)
+  └─ Else if DOCX/PPT/HTML/TXT:
+      ├─ Use corresponding parser (no OCR)
+      └─ Output: sections + optional tables/media
+
+1. __images__():
+## **🎯 Mục tiêu của `__images__()`**
+Chuyển đổi PDF thành ảnh và chuẩn bị dữ liệu cho OCR xử lý.
+
+## **📋 Luồng hoạt động chính**
+
+### **Bước 1: Render PDF → Ảnh**
+```python
+# Input: PDF file
+# Output: Danh sách ảnh PIL cho mỗi trang
+self.page_images = [p.to_image(resolution=72 * zoomin) for p in pdf.pages]
+```
+
+**Ví dụ:**
+- PDF có 3 trang → `page_images = [img_page1, img_page2, img_page3]`
+- Mỗi ảnh có độ phân giải 216 DPI (72 × 3)
+
+### **Bước 2: Trích xuất characters gốc từ PDF**
+```python
+# Trích xuất text gốc từ PDF (không qua OCR)
+self.page_chars = [[char1, char2, ...], [char1, char2, ...], ...]
+```
+
+**Ví dụ:**
+```python
+self.page_chars = [
+    [{"text": "H", "x0": 100, "y0": 50}, {"text": "e", "x0": 108, "y0": 50}, ...],  # Trang 1
+    [{"text": "X", "x0": 100, "y0": 50}, {"text": "i", "x0": 108, "y0": 50}, ...],  # Trang 2
+    [{"text": "A", "x0": 100, "y0": 50}, {"text": "B", "x0": 108, "y0": 50}, ...]   # Trang 3
+]
+```
+
+### **Bước 3: Phát hiện ngôn ngữ**
+```python
+# Kiểm tra từng trang có phải tiếng Anh không
+self.is_english = [True/False, True/False, True/False]
+```
+
+**Ví dụ:**
+- Trang 1: "Hello World" → `True` (tiếng Anh)
+- Trang 2: "Xin chào" → `False` (tiếng Việt)  
+- Trang 3: "Good morning" → `True` (tiếng Anh)
+- **Kết quả**: `self.is_english = True` (>50% là tiếng Anh)
+
+### **Bước 4: Xử lý song song cho từng trang**
+
+**Với mỗi trang:**
+
+#### **4a. Chuẩn bị dữ liệu**
+```python
+chars = self.page_chars[i] if not self.is_english else []
+```
+
+**Ví dụ:**
+- Vì `is_english = True` → `chars = []` (rỗng cho tất cả trang)
+
+#### **4b. Cải thiện spacing (nếu có chars)**
+```python
+# Thêm space giữa các từ nếu cần
+# Ví dụ: "HelloWorld" → "Hello World"
+```
+
+#### **4c. Gọi OCR**
+```python
+self.__ocr(page_num, image, chars, zoom_factor, device_id)
+```
+
+## **🔄 Luồng xử lý trong `__ocr()`**
+
+### **Input:**
+- `page_num`: Số trang (1, 2, 3...)
+- `image`: Ảnh PIL của trang
+- `chars`: Characters gốc từ PDF (rỗng nếu tiếng Anh)
+- `zoom_factor`: 3 (hệ số phóng to)
+
+### **Xử lý:**
+
+#### **1. Text Detection**
+```python
+# OCR phát hiện vùng chứa text
+boxes = ocr.detect(image)
+# Ví dụ: [box1, box2, box3] - 3 vùng text được phát hiện
+```
+
+#### **2. Merge với PDF characters (nếu có)**
+```python
+# Nếu chars rỗng → bỏ qua bước này
+# Nếu chars có dữ liệu → gán characters vào OCR boxes
+```
+
+#### **3. Text Recognition**
+```python
+# Nhận dạng nội dung text trong mỗi vùng
+for box in boxes:
+    if not box["text"]:  # Chưa có text (từ PDF)
+        text = ocr.recognize(box["image"])  # OCR nhận dạng
+        box["text"] = text
+```
+
+### **Output:**
+```python
+# Danh sách boxes với text đã nhận dạng
+self.boxes[page_num-1] = [
+    {"x0": 100, "y0": 50, "text": "Hello"},
+    {"x0": 200, "y0": 50, "text": "World"},
+    {"x0": 300, "y0": 100, "text": "Sample"}
+]
+```
+
+## **📝 Ví dụ hoàn chỉnh**
+
+### **Input:** PDF có 2 trang
+- Trang 1: "Hello World"
+- Trang 2: "Good Morning"
+
+### **Luồng xử lý:**
+
+#### **1. Render ảnh:**
+```python
+page_images = [img_page1, img_page2]
+```
+
+#### **2. Trích xuất characters:**
+```python
+page_chars = [
+    [{"text": "H"}, {"text": "e"}, {"text": "l"}, ...],  # Trang 1
+    [{"text": "G"}, {"text": "o"}, {"text": "o"}, ...]   # Trang 2
+]
+```
+
+#### **3. Phát hiện ngôn ngữ:**
+```python
+is_english = True  # Cả 2 trang đều tiếng Anh
+```
+
+#### **4. Xử lý song song:**
+
+**Trang 1:**
+```python
+chars = []  # Rỗng vì tiếng Anh
+ocr_boxes = [
+    {"x0": 100, "y0": 50, "text": "Hello"},
+    {"x0": 200, "y0": 50, "text": "World"}
+]
+```
+
+**Trang 2:**
+```python
+chars = []  # Rỗng vì tiếng Anh
+ocr_boxes = [
+    {"x0": 100, "y0": 50, "text": "Good"},
+    {"x0": 200, "y0": 50, "text": "Morning"}
+]
+```
+
+#### **5. Kết quả cuối:**
+```python
+self.boxes = [
+    [{"text": "Hello"}, {"text": "World"}],      # Trang 1
+    [{"text": "Good"}, {"text": "Morning"}]      # Trang 2
+]
+```
+
+## **🎯 Tóm tắt ngắn gọn**
+
+1. **PDF → Ảnh**: Render từng trang thành ảnh
+2. **Trích text gốc**: Lấy characters từ PDF (nếu có)
+3. **Phát hiện ngôn ngữ**: Tiếng Anh hay không?
+4. **Xử lý song song**: OCR từng trang đồng thời
+5. **Kết hợp**: OCR detection + PDF text (nếu cần)
+6. **Kết quả**: Danh sách text boxes với nội dung đã nhận dạng
+
+**Điểm quan trọng:**
+- **Tiếng Anh**: Dùng OCR thuần (nhanh)
+- **Không tiếng Anh**: Kết hợp PDF text + OCR (chính xác)
