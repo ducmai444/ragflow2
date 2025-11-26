@@ -29,6 +29,7 @@ def transform(data, ops=None):
     return data
 
 def create_operators(op_param_list, global_config=None):
+    # TODO 
     ops = []
     for operator in op_param_list:
         op_name = list(operator)[0]
@@ -220,4 +221,157 @@ class TextDetector:
         img_height, img_width = image_shape[0:2]
         dt_boxes_new = []
         for box in dt_boxes:
+            if isinstance(box, list):
+                box = np.array(box)
+            box = self.order_points_clockwise(box)
+            box = self.clip_det_res(box, img_height, img_width)
+            rect_width = int(np.linalg.norm(box[0] - box[1]))
+            rect_height = int(np.linalg.norm(box[0] - box[3]))
+            if rect_width <= 3 or rect_height <= 3:
+                continue
+            dt_boxes_new.append(box)
+        dt_boxes = np.array(dt_boxes_new)
+        return dt_boxes
+    
+    def __call__(self, img):
+        ori_im = img.copy()
+        data = {"image": img}
+
+        st = time.time()
+        data = transform(data, self.preprocess_op)
+        img, shape_list = data
+        if img is None:
+            return None, 0
+        img = np.expand_dims(img, axis=0)
+        shape_list = np.expand_dims(shape_list, axis=0)
+        img = img.copy()
+        input_dict = {}
+        input_dict[self.input_tensor.name] = img
+        for i in range(100000):
+            try:
+                outputs = self.predictor.run(None, input_dict, self.run_options)
+                break
+            except Exception as e:
+                if i >= 3:
+                    raise e
+                time.sleep(5)
+        
+        post_result = self.postprocess_op({"maps": outputs[0]}, shape_list)
+        dt_boxes = post_result[0]["points"]
+        dt_boxes = self.filter_tag_det_res(dt_boxes, ori_im.shape)
+
+        return dt_boxes, time.time() - st
+    
+class OCR:
+    def __init__(self, model_dir=None):
+        if not model_dir:
+            try:
+                model_dir = os.path.join(
+                    get_project_base_directory(),
+                    "rag/res/deepdoc"
+                )
+                if PARALLEL_DEVICES > 0:
+                    self.text_detector = []
+                    self.text_recognizer = []
+                    for device_id in range(PARALLEL_DEVICES):
+                        self.text_detector.append(TextDetector(model_dir, device_id))
+                        self.text_recognizer.append(TextRecognizer(model_dir, device_id))
+                else:
+                    self.text_detector = [TextDetector(model_dir)]
+                    self.text_recognizer = [TextRecognizer(model_dir)]
+
+            except Exception:
+                model_dir = snapshot_download(repo_id="InfiniFlow/deepdoc",
+                                            local_dir=os.path.join(get_project_base_directory(), "rag/res/deepdoc"),
+                                            local_dir_use_symlinks=False)
+                if PARALLEL_DEVICES > 0:
+                    self.text_detector = []
+                    self.text_recognizer = []
+                    for device_id in range(PARALLEL_DEVICES):
+                        self.text_detector.append(TextDetector(model_dir, device_id))
+                        self.text_recognizer.append(TextRecognizer(model_dir, device_id))
+                else:
+                    self.text_detector = [TextDetector(model_dir)]
+                    self.text_recognizer = [TextRecognizer(model_dir)]
+        
+        self.drop_score = 0.5
+        self.crop_image_res_index = 0
+    
+    def get_rotate_crop_image(self, img, points):
+        assert len(points) == 4
+        img_crop_width = int(
+            max(
+                np.linalg.norm(points[0] - points[1]),
+                np.linalg.norm(points[2] - points[3])
+            )
+        )
+        img_crop_height = int(
+            max(
+                np.linalg.norm(points[0] - points[1]),
+                np.linalg.norm(points[2] - points[3])
+            )
+        )
+        pts_std = np.float32([[0,0], [img_crop_width, 0],
+                                [img_crop_width, img_crop_height],
+                                [0, img_crop_height]])
+        M = cv2.getPerspectiveTransform(points, pts_std)
+        dst_img = cv2.warpPerspective(
+            img,
+            M, (img_crop_width, img_crop_height),
+            borderMode=cv2.BORDER_REPLICATE,
+            flags=cv2.INTER_CUBIC
+        )
+        dst_img_height, dst_img_width = dst_img.shape[0:2]
+        if dst_img_height * 1.0 / dst_img_width >= 1.5:
+            # Try org orientation
+            rec_result = self.text_recognizer[0]([dst_img])
+            text, score = rec_result[0][0]
+            best_score = score
+            best_img = dst_img
+
+            # Try clockwise 90 rotation
+            rotated_cw = np.rot90(dst_img, k=3)
+            rec_result = self.text_recognizer[0]([rotated_cw])
+            rotated_cw_text, rotated_cw_score = rec_result[0][0]
+            if rotated_cw_score > best_score:
+                best_score = rotated_cw_score
+                best_img = rotated_cw
+            
+            # Ty counter-clockwise 90 rotation
+            rotated_ccw = np.rot90(dst_img, k=1)
+            rec_result = self.text_recognizer[0]([rotated_ccw])
+            rotated_ccw_text, rotated_ccw_score = rec_result[0][0]
+            if rotated_ccw_score > best_score:
+                best_img = rotated_ccw
+            
+            dst_img = best_img
+        
+        return dst_img
+
+    def sorted_boxes(self, dt_boxes):
+        """
+        Sort text boxes in order from top to bottom, left to right
+        """
+        num_boxes = dt_boxes.shape[0]
+        sorted_boxes = sorted(dt_boxes, key=lambda x: (x[0][1], x[0][0]))
+        _boxes = list(sorted_boxes)
+
+        for i in range(num_boxes - 1):
+            for j in range(i, -1, -1):
+                if abs(_boxes[j + 1][0][1] - _boxes[j][0][1]) < 10 and \
+                        (_boxes[j + 1][0][0] < _boxes[j][0][0]):
+                    tmp = _boxes[j + 1]
+                    _boxes[j] = _boxes[j + 1]
+                    _boxes[j + 1] = tmp
+                else:
+                    break
+        return _boxes
+
+    def detect(self, img, device_id: int | None = None):
+        if device_id is None:
+            device_id = 0
+        
+        time_dict = {"det": 0, "rec": 0, "cls": 0, "all": 0}
+        
+        if img is None:
             
