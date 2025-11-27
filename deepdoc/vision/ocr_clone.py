@@ -374,4 +374,79 @@ class OCR:
         time_dict = {"det": 0, "rec": 0, "cls": 0, "all": 0}
         
         if img is None:
-            
+            return None, None, time_dict
+        
+        start = time.time()
+        dt_boxes, elapse = self.text_detector[device_id](img)
+        time_dict["det"] = elapse
+
+        if dt_boxes is None:
+            end = time.time()
+            time_dict["all"] = end - start
+            return None, None, time_dict
+        
+        return zip(self.sorted_boxes(dt_boxes),
+                        [("", 0) for _ in range(len(dt_boxes))])
+
+    def recognize(self, ori_img, box, device_id: int | None = None):
+        if device_id is None:
+            device_id = 0
+
+        img_crop = self.get_rotate_crop_image(ori_img, box)
+        rec_res, elapse = self.text_recognizer[device_id]([img_crop])
+        text, score = rec_res[0]
+        if score < self.drop_score:
+            return ""
+        return text
+    
+    def recognize_batch(self, img_list, device_id: int | None = None):
+        if device_id is None:
+            device_id = 0
+        rec_res, elapse = self.text_recognizer[device_id](img_list)
+        texts = []
+        for i in range(len(rec_res)):
+            text, score = rec_res[i]
+            if score < self.drop_score:
+                text = ""
+            texts.append(text)
+        return texts
+    
+    def __call__(self, img, device_id = 0, cls=True):
+        time_dict = {"det": 0, "rec": 0, "rec": 0, "all": 0}
+        if device_id is None:
+            device_id = 0
+        
+        if img is None:
+            return None, None, time_dict
+        
+        start = time.time()
+        ori_img = img.copy()
+        dt_boxes, elapse = self.text_detector[device_id](img)
+        time_dict['det'] = elapse
+
+        if dt_boxes is None:
+            end = time.time()
+            time_dict['all'] = end - start
+            return None, None, time_dict
+        
+        img_crop_list = []
+
+        for bno in range(len(dt_boxes)):
+            tmp_box = copy.deepcopy(dt_boxes[bno])
+            img_crop = self.get_rotate_crop_image(ori_img, tmp_box)
+            img_crop_list.append(img_crop)
+        
+        rec_res, elapse = self.text_recognizer[device_id](img_crop_list)
+
+        time_dict["rec"] = elapse
+
+        filter_boxes, filter_rec_res = [], []
+        for box, rec_result in zip(dt_boxes, rec_res):
+            text, score = rec_result
+            if score >= self.drop_score:
+                filter_boxes.append(box)
+                filter_rec_res.append(rec_result)
+        end = time.time()
+        time_dict["all"] = end - start
+
+        return list(zip([a.tolist() for a in filter_boxes], filter_rec_res))
