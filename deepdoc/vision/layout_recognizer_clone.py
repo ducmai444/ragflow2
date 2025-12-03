@@ -122,8 +122,8 @@ class LayoutRecognizer(Recognizer):
                 lt["layout_type"] = "figure"
                 lt["layoutno"] = f"figure-{i}"
                 bxs.append(lt)
-            
-            boxes.append(bxs)
+
+            boxes.extend(bxs)
         
         ocr_res = boxes
 
@@ -133,9 +133,9 @@ class LayoutRecognizer(Recognizer):
             for g, c in garbages[k].items():
                 if c > 1:
                     garbage_set.add(g)
+
         ocr_res = [b for b in ocr_res if b["text"].strip() not in garbage_set]
         return ocr_res, page_layout
     
     def forward(self, image_list, thr=0.7, batch_size=16):
         return super().__call__(image_list, thr, batch_size)
-    
