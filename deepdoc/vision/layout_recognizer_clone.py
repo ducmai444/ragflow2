@@ -96,5 +96,48 @@ class LayoutRecognizer(Recognizer):
                         lts_[ii]["type"] == "footer" and bxs[i]["bottom"] < image_list[pn].size[1] * 0.9 / scale_factor,
                         lts_[ii]["type"] == "header" and bxs[i]["top"] > image_list[pn].size[1] * 0.1 / scale_factor,
                     ]
-                    if drop and lts_[ii]["type"] in self.garbage_layouts and not any(keep_feats):
-                        
+                    if drop and lts_[
+                            ii]["type"] in self.garbage_layouts and not any(keep_feats):
+                        if lts_[ii]["type"] not in garbages:
+                            garbages[lts_[ii]["type"]] = []
+                        garbages[lts_[ii]["type"]].append(bxs[i]["text"])
+                        bxs.pop(i)
+                        continue
+
+                    bxs[i]["layoutno"] = f"{ty}-{ii}"
+                    bxs[i]["layout_type"] = lts_[ii]["type"] if lts_[
+                        ii]["type"] != "equation" else "figure"
+                    i += 1
+
+            for lt in ["footer", "header", "reference", "figure caption",
+                       "table caption", "title", "table", "text", "figure", "equation"]:
+                findLayout(lt)
+
+            # add box to figure layouts which has not text box
+            for i, lt in enumerate(
+                    [lt for lt in lts if lt["type"] in ["figure", "equation"]]):
+                if lt.get("visited"):
+                    continue
+                lt = deepcopy(lt)
+                del lt["type"]
+                lt["text"] = ""
+                lt["layout_type"] = "figure"
+                lt["layoutno"] = f"figure-{i}"
+                bxs.append(lt)
+
+            boxes.extend(bxs)
+
+        ocr_res = boxes
+
+        garbag_set = set()
+        for k in garbages.keys():
+            garbages[k] = Counter(garbages[k])
+            for g, c in garbages[k].items():
+                if c > 1:
+                    garbag_set.add(g)
+
+        ocr_res = [b for b in ocr_res if b["text"].strip() not in garbag_set]
+        return ocr_res, page_layout
+
+    def forward(self, image_list, thr=0.7, batch_size=16):
+        return super().__call__(image_list, thr, batch_size)
