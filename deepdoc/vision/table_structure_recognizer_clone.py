@@ -138,4 +138,35 @@ class TableStructureRecognizer(Recognizer):
         max_type = max(max_type, key=lambda x: x[1])[0] if max_type else ""
         logging.debug("MAXTYPE: " + max_type)
 
-        rowh = 
+        # Add new row
+        rowh = [b["R_bott"] - b["R_top"] for b in boxes if "R" in b]
+        rowh = np.min(rowh) if rowh else 0
+        boxes = Recognizer.sort_R_firstly(boxes, rowh/2)
+
+        boxes[0]["rn"] = 0
+        rows = [[boxes[0]]]
+        btm = boxes[0]["bottom"]
+        for b in boxes[1:]:
+            b["rn"] = len(rows) - 1
+            lst_r = rows[-1]
+            # New box and current box has differ R value -> new row
+            # New box place near or below current box 3 pixels and differ R value -> new row
+            if lst_r[-1].get("R", "") != b.get("R", "") \
+                or (b["top"] >= btm - 3 and lst_r[-1].get("R", "-1") != b.get("R", "-2")):
+                # New row
+                btm = b["bottom"]
+                b["rn"] += 1
+                rows.append([b])
+                continue
+            btm = (btm + b["bottom"]) / 2
+            rows[-1].append(b)
+        
+        # Add new column
+        colwm = [b["C_right"] - b["C_left"] for b in boxes if "C" in b]
+        colwm = np.min(colwm) if colwm else 0
+        crosspage = len(set([b["page_number"] for b in boxes])) > 1
+        if crosspage: 
+            boxes = Recognizer.sort_X_firstly(boxes, colwm/2)
+        else:
+            boxes = Recognizer.sort_C_firstly(boxes, colwm/2)
+        
