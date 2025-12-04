@@ -1,4 +1,5 @@
 import logging
+from operator import is_
 import os
 import re
 from collections import Counter
@@ -27,7 +28,7 @@ class TableStructureRecognizer(Recognizer):
                                               local_dir=os.path.join(get_project_base_directory(), "rag/res/deepdoc"),
                                               local_dir_use_symlinks=False))
 
-    def __call__(self, images, thr=0.2);
+    def __call__(self, images, thr=0.2):
         tbls = super().__call__(images, thr)
         res = []
         # align left & right for rows, align top & bottom for columns
@@ -133,7 +134,7 @@ class TableStructureRecognizer(Recognizer):
         if not boxes:
             return []
         for b in boxes:
-            b["btype"] = TableStructureRecognizer.blockType()
+            b["btype"] = TableStructureRecognizer.blockType(b)
         max_type = Counter([b["btype"] for b in boxes]).items()
         max_type = max(max_type, key=lambda x: x[1])[0] if max_type else ""
         logging.debug("MAXTYPE: " + max_type)
@@ -169,4 +170,320 @@ class TableStructureRecognizer(Recognizer):
             boxes = Recognizer.sort_X_firstly(boxes, colwm/2)
         else:
             boxes = Recognizer.sort_C_firstly(boxes, colwm/2)
+        boxes[0]["cn"] = 0
+        cols = [[boxes[0]]]
+        right = boxes[0]["x1"]
+        for b in boxes[1:]:
+            b["cn"] = len(cols) -  1
+            lst_c = cols[-1]
+            if (int(b.get("C", "1")) - int(lst_c[-1].get("C", "1")) == 1 and
+                b["page_number"] == lst_c[-1]["page_number"]) \
+                    or (b["x0"] >= right and lst_c[-1].get("C", "-1") != b.get("C", "-2")):
+                right = b["x1"]
+                b["cn"] += 1
+                cols.append([b])
+                continue
+            right = (right + b["x1"]) / 2
+            cols[-1].append(b)
         
+        tbl = [[[] for _ in range(len(cols))] for _ in range(len(rows))]
+        for b in boxes:
+            tbl[b["rn"]][b["cn"]].append(b)
+        
+        # TODO: debug
+        if len(rows) >= 4:
+            # remove single in column
+            j = 0
+            while j < len(tbl[0]):
+                e, ii = 0, 0
+                for i in range(len(tbl)):
+                    if tbl[i][j]:
+                        e += 1
+                        ii = i
+                    if e > 1:
+                        break
+                if e > 1:
+                    j += 1
+                    continue
+                f = (j > 0 and tbl[ii][j - 1] and tbl[ii]
+                     [j - 1][0].get("text")) or j == 0
+                ff = (j + 1 < len(tbl[ii]) and tbl[ii][j + 1] and tbl[ii]
+                      [j + 1][0].get("text")) or j + 1 >= len(tbl[ii])
+                if f and ff:
+                    j += 1
+                    continue
+                bx = tbl[ii][j][0]
+                logging.debug("Relocate column single: " + bx["text"])
+                # j column only has one value
+                left, right = 100000, 100000
+                if j > 0 and not f:
+                    for i in range(len(tbl)):
+                        if tbl[i][j - 1]:
+                            left = min(left, np.min(
+                                [bx["x0"] - a["x1"] for a in tbl[i][j - 1]]))
+                if j + 1 < len(tbl[0]) and not ff:
+                    for i in range(len(tbl)):
+                        if tbl[i][j + 1]:
+                            right = min(right, np.min(
+                                [a["x0"] - bx["x1"] for a in tbl[i][j + 1]]))
+                assert left < 100000 or right < 100000
+                if left < right:
+                    for jj in range(j, len(tbl[0])):
+                        for i in range(len(tbl)):
+                            for a in tbl[i][jj]:
+                                a["cn"] -= 1
+                    if tbl[ii][j - 1]:
+                        tbl[ii][j - 1].extend(tbl[ii][j])
+                    else:
+                        tbl[ii][j - 1] = tbl[ii][j]
+                    for i in range(len(tbl)):
+                        tbl[i].pop(j)
+
+                else:
+                    for jj in range(j + 1, len(tbl[0])):
+                        for i in range(len(tbl)):
+                            for a in tbl[i][jj]:
+                                a["cn"] -= 1
+                    if tbl[ii][j + 1]:
+                        tbl[ii][j + 1].extend(tbl[ii][j])
+                    else:
+                        tbl[ii][j + 1] = tbl[ii][j]
+                    for i in range(len(tbl)):
+                        tbl[i].pop(j)
+                cols.pop(j)
+        
+        assert len(cols) == len(tbl[0]), "Column NO. miss matched: %d vs %d" % (
+            len(cols), len(tbl[0]))
+        
+        #TODO: debug
+        if len(cols) >= 4:
+            # remove single in row
+            i = 0
+            while i < len(tbl):
+                e, jj = 0, 0
+                for j in range(len(tbl[i])):
+                    if tbl[i][j]:
+                        e += 1
+                        jj = j
+                    if e > 1:
+                        break
+                if e > 1:
+                    i += 1
+                    continue
+                f = (i > 0 and tbl[i - 1][jj] and tbl[i - 1]
+                     [jj][0].get("text")) or i == 0
+                ff = (i + 1 < len(tbl) and tbl[i + 1][jj] and tbl[i + 1]
+                      [jj][0].get("text")) or i + 1 >= len(tbl)
+                if f and ff:
+                    i += 1
+                    continue
+
+                bx = tbl[i][jj][0]
+                logging.debug("Relocate row single: " + bx["text"])
+                # i row only has one value
+                up, down = 100000, 100000
+                if i > 0 and not f:
+                    for j in range(len(tbl[i - 1])):
+                        if tbl[i - 1][j]:
+                            up = min(up, np.min(
+                                [bx["top"] - a["bottom"] for a in tbl[i - 1][j]]))
+                if i + 1 < len(tbl) and not ff:
+                    for j in range(len(tbl[i + 1])):
+                        if tbl[i + 1][j]:
+                            down = min(down, np.min(
+                                [a["top"] - bx["bottom"] for a in tbl[i + 1][j]]))
+                assert up < 100000 or down < 100000
+                if up < down:
+                    for ii in range(i, len(tbl)):
+                        for j in range(len(tbl[ii])):
+                            for a in tbl[ii][j]:
+                                a["rn"] -= 1
+                    if tbl[i - 1][jj]:
+                        tbl[i - 1][jj].extend(tbl[i][jj])
+                    else:
+                        tbl[i - 1][jj] = tbl[i][jj]
+                    tbl.pop(i)
+
+                else:
+                    for ii in range(i + 1, len(tbl)):
+                        for j in range(len(tbl[ii])):
+                            for a in tbl[ii][j]:
+                                a["rn"] -= 1
+                    if tbl[i + 1][jj]:
+                        tbl[i + 1][jj].extend(tbl[i][jj])
+                    else:
+                        tbl[i + 1][jj] = tbl[i][jj]
+                    tbl.pop(i)
+                rows.pop(i)
+        
+        # Which rows are headers
+        hdset = set([])
+        for i in range(len(tbl)):
+            cnt, h = 0, 0
+            for j, arr in enumerate(tbl[i]):
+                if not arr:
+                    continue
+                cnt += 1
+                if max_type == "Nu" and arr[0]["btype"] == "Nu":
+                    continue
+                if any([a.get("H") for a in arr]) \
+                    or (max_type == "Nu" and arr[0]["btype"] != "Nu"):
+                    h += 1
+            if h/cnt > 0.5:
+                hdset.add(i)
+        
+        if html:
+            return TableStructureRecognizer.__html_table(cap, hdset,
+                                            TableStructureRecognizer.__call_spans(boxes, rows, cols, tbl, True))
+        return TableStructureRecognizer.__desc_table(cap, hdset,
+                                        TableStructureRecognizer.__call_spans(boxes, rows, cols, tbl, False), is_english)
+    
+    @staticmethod
+    def __html_table(cap, hdset, tbl):
+        html = "<table>"
+        if cap:
+            html += f"<caption>{cap}<caption>"
+        for i in range(len(tbl)):
+            row = "<tr>"
+            txts = []
+            for j, arr in enumerate(tbl[i]):
+                if arr is None:
+                    continue
+                if not arr:
+                    row += "<td></td>" if i not in hdset else "<th></th>"
+                    continue
+                txt = ""
+                if arr:
+                    h = min(np.min([c["bottom"] - c["top"] for c in arr]) / 2, 10)
+                    txt = " ".join([c["text"] for c in Recognizer.sort_Y_firstly(arr, h)])
+                
+                txts.append(txt)
+                sp = ""
+                if arr[0].get("colspan"):
+                    sp = f"colspan={arr[0]["colspan"]}"
+                if arr[0].get("rowspan"):
+                    sp += f"rowspan={arr[0]["rowspan"]}"
+                if i in hdset:
+                    row += f"<th {sp} >" + txt + "</th>"
+                else:
+                    row += f"<td {sp} >" + txt + "</td>"
+            
+            if i in hdset:
+                if all([t in hdset for t in txts]):
+                    continue
+                for t in txts:
+                    hdset.add(t)
+                
+            if row != "<tr>":
+                row += "</tr>"
+            else:
+                row = ""
+            html += "\n" + row
+        html += "\n</table>"
+        return html
+    
+    @staticmethod
+    def __desc_table(cap, hdr_rowno, tbl, is_english):
+        # Get text of every column in header row to become header text
+        clmno = len(tbl[0])
+        rowno = len(tbl)
+        headers = {}
+        hdrset = set()
+        lst_hdr = []
+        de = " for "
+        for r in sorted(list(hdr_rowno)):
+            headers[r] = ["" for _ in range(clmno)]
+            for i in range(clmno):
+                if not tbl[r][i]:
+                    continue
+                txt = " ".join([a["text"].strip() for a in tbl[r][i]])
+                headers[r][i] = txt
+                hdrset.add(txt)
+            if all([not t for t in headers[r]]):
+                del headers[r]
+                hdr_rowno.remove(r)
+                continue
+            for j in range(clmno):
+                if headers[r][j]:
+                    continue
+                if j >= len(lst_hdr):
+                    break
+                headers[r][j] = lst_hdr[j]
+            lst_hdr = headers[r]
+        for i in range(rowno):
+            if i not in hdr_rowno:
+                continue
+            for j in range(i+1, rowno):
+                if j not in hdr_rowno:
+                    break
+                for k in range(clmno):
+                    if not headers[j-1][k]:
+                        continue
+                    if headers[j][k].find(headers[j-1][k]) >= 0:
+                        continue
+                    if len(headers[j][k]) > len(headers[j-1][k]):
+                        headers[j][k] += (de if headers[j][k] else "") + headers[j-1][k]
+                    else:
+                        headers[j][k] = headers[j-1][k] +  \
+                                            (de if headers[j-1][k] else "") + \
+                                            headers[j][k]
+        logging.debug(
+            f">>>>>>>>>>>>>{cap}:SIZE:{rowno}X{clmno} Header: {hdr_rowno}"
+        )
+
+        row_txt = []
+        for i in range(rowno):
+            if i in hdr_rowno:
+                continue
+            rtxt = []
+
+            def append(delimer):
+                nonlocal rtxt, row_txt
+                rtxt = delimer.join(rtxt)
+                if row_txt and len(row_txt[-1]) + len(rtxt) < 64:
+                    row_txt[-1] += "\n" + rtxt
+                else:
+                    row_txt.append(rtxt)
+            
+            r = 0
+            if len(headers.items()):
+                _arr = [(i - r, r) for r, _ in headers.items() if r < i]
+                if _arr:
+                    _, r = min(_arr, key=lambda x: x[0])
+            
+            if r not in headers and clmno <= 2:
+                for j in range(clmno):
+                    if not tbl[i][j]:
+                        continue
+                    txt = "".join([a["text"].strip() for a in tbl[i][j]])
+                    if txt:
+                        rtxt.append(txt)
+                if rtxt:
+                    append(":")
+                continue
+        
+            for j in range(clmno):
+                if not tbl[j][i]:
+                    continue
+                txt = "".join([a["text"].strip() for a in tbl[i][j]])
+                if not txt:
+                    continue
+                ctt = headers[r][j] if r in headers else ""
+                if ctt:
+                    ctt += ":"
+                ctt += txt
+                if ctt:
+                    rtxt.append(ctt)
+            
+            if rtxt:
+                row_txt.append("; ".join(rtxt))
+            
+        if cap:
+            if is_english:
+                from_ = " in "
+            row_txt = [t + f"\t——{from_}“{cap}”" for t in row_txt]
+        
+        return row_txt
+
+    @staticmethod
+    
