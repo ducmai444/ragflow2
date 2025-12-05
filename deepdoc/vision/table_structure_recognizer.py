@@ -559,7 +559,7 @@ class TableStructureRecognizer(Recognizer):
                         if "rowspan" in a:
                             del a["rowspan"]
                         if "colspan" in a:
-                            del a["colspan"]
+                            del a[  "colspan"]
                     continue
                 rowspan, colspan = sorted(rowspan), sorted(colspan)
                 rowspan = list(range(rowspan[0], rowspan[-1] + 1))
