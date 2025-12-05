@@ -5,13 +5,13 @@
 #   ./test_vision_pipeline.bash [tên_conda_env] [đường_dẫn_file]
 
 # Tên conda environment (thay đổi theo môi trường của bạn)
-CONDA_ENV="${1:-fis}"  # Mặc định là "ragflow" nếu không truyền tham số
+CONDA_ENV="${1:-ducmb}"  # Mặc định là "ragflow" nếu không truyền tham số
 
 # Đường dẫn file input (thay đổi theo file của bạn)
-INPUT_FILE="${2:-/home/maibaduc/rag/ragflow/deepdoc/vision/teset.pdf}"
+INPUT_FILE="${2:-/home/ducmb/Projects/ragflow2/deepdoc/vision/test.pdf}"
 
 # Đường dẫn đến root của project (ragflow)
-PROJECT_ROOT="/home/maibaduc/rag/ragflow"
+PROJECT_ROOT="/home/ducmb/Projects/ragflow2"
 
 # Đường dẫn đến script Python
 SCRIPT_PATH="$PROJECT_ROOT/deepdoc/test_vision_pipeline.py"

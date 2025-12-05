@@ -1,0 +1,226 @@
+Table 2: LibriSpeech test WER (%) evaluated for varying net-
+As discussed further in section 5, we can improve the perfor-
+works, schedules and policies. First row from [25].
+ mance of the trained network by using a longer schedule. We
+ thus introduce the following schedule:
+No LM
+With LM
+3. L(ong): (Sr, Snoise, Si, sf) = (1k, 20k, 140k, 320k)
+Network
+Sch
+Pol
+clean
+clean
+other
+other
+which we use to train the largest model to improve performance.
+When using schedule L, label smoothing with uncertainty 0.1 is
+LAS-4-1024 [25]
+B
+4.7
+13.4
+3.6
+10.3
+introduced for time steps < st = 140k for LibriSpeech 960h,
+B
+LB
+3.7
+10.0
+3.4
+8.3
+and is subsequently turned off. For Switchboard 300h, label
+B
+LD
+3.6
+9.2
+2.8
+7.5
+ smoothing is turned on throughout training.
+LAS-4-1024
+D
+4.4
+13.3
+3.5
+10.4
+D
+LB
+3.4
+9.2
+2.7
+7.3
+ 3.3. Shallow Fusion with Language Models
+D
+LD
+3.4
+8.3
+2.8
+6.8
+D
+4.5
+13.1
+3.6
+10.3
+While we are able to get state-of-the-art results with augmen-
+LAS-6-1024
+D
+LB
+3.4
+8.6
+2.6
+6.7
+tation, we can get further improvements by using a language
+D
+LD
+3.2
+8.0
+2.6
+6.5
+model. We thus incorporate an RNN language model by shal-
+D
+4.3
+12.9
+3.5
+10.5
+low fusion for both tasks. In shallow fusion, the “next token"
+LAS-6-1280
+D
+LB
+3.4
+8.7
+2.8
+7.1
+ y* in the decoding process is determined by
+LD
+3.2
+7.7
+6.5
+y*
+= argmax (log P(y|x) + 入log PLm (y)) ;
+(1)
+y
+ can incorporate an LM using shallow fusion to further improve
+i.e., by jointly scoring the token using the base ASR model and
+ performance. The results are presented in Table 3.
+the language model. We also use a coverage penalty c [29].
+ For LibriSpeech, we use a two-layer RNN with embedding 
+Table 3: LibriSpeech 960h WERs (%).
+ dimension 1024 used in [25] for the LM, which is trained on
+ the LibriSpeech LM corpus. We use identical fusion parameters 
+Method
+ No LM
+With LM
+(入 = 0.35 and c = 0.05) used in [25] throughout.
+ For Switchboard, we use a two-layer RNN with embedding 
+clean
+other
+clean
+ other
+ dimension 256, which is trained on the combined transcripts of
+HMM
+the Fisher and Switchboard datasets. We find the fusion pa-
+Panayotov et al., (2015) [20] 
+5.51
+13.97
+rameters via grid search by measuring performance on RT-03
+Povey et al.,(2016) [30]
+4.28
+Han et al., (2017) [31]
+3.51
+8.58
+(LDC2007S10). We discuss the fusion parameters used in indi-
+Yang et al. (2018) [32]
+2.97
+7.50
+vidual experiments in section 4.2.
+CTC/ASG
+Collobert et al.,(2016) [33]
+7.2
+4. Experiments
+Liptchinsky et al., (2017) [34]
+6.7
+20.8
+4.8
+14.5
+Zhou et al., (2018) [35]
+5.42
+14.70
+ In this section, we describe our experiments on LibriSpeech and
+Zeghidour et al., (2018) [36]
+3.44
+11.24
+ Switchboard with SpecAugment. We report state-of-the-art re-
+Li et al., (2019) [37]
+3.86
+11.95
+2.95
+8.79
+ sults that out-perform heavily engineered hybrid systems.
+LAS
+ Zeyer et al.,(2018) [24]
+4.87
+15.39
+3.82
+12.76
+4.1. LibriSpeech 960h
+Zeyer et al., (2018) [38]
+4.70
+15.20
+For LibriSpeech, we use the same setup as [25], where we use
+Irie et al.,(2019) [25]
+4.7
+13.4
+3.6
+10.3
+Sabour et al.,(2019) [39]
+4.5
+ 80-dimensional filter banks with delta and delta-delta accelera-
+13.3
+tion, and a 16k word piece model [26].
+ Our Work
+The three networks LAS-4-1024, LAS-6-1024 and LAS-6-
+LAS
+4.1
+12.5
+3.2
+9.8
+1280 are trained on LibriSpeech 960h with a combination of
+ LAS + SpecAugment
+2.8
+6.8
+2.5
+5.8
+augmentation policies (None, LB, LD) and training schedules
+(B/D). Label smoothing was not applied in these experiments.
+ 4.2. Switchboard 300h
+The experiments were run with peak learning rate of 0.001 and
+batch size of 512, on 32 Google Cloud TPU chips for 7 days.
+ For Switchboard 300h, we use the Kaldi [40] "s5c" recipe to
+ Other than the augmentation policies and learning rate sched-
+ process our data, but we adapt the recipe to use 80-dimensional 
+ules, all other hyperparameters were fixed, and no additional
+filter banks with delta and delta-delta acceleration. We use a 1k
+ tuning was applied. We report test set numbers validated by the
+WPM [26] to tokenize the output, constructed using the com-
+ dev-other set in Table 2. We see that augmentation consistently
+ bined vocabulary of the Switchboard and Fisher transcripts.
+ improves the performance of the trained network, and that the
+We train LAS-4-1024 with policies (None, SM, SS) and
+ benefit of a larger network and a longer learning rate schedule
+ schedule B. As before, we set the peak learning rate to 0.001
+ is more apparent with harsher augmentation.
+and total batch size to 512, and train using 32 Google Cloud
+We take the largest network, LAS-6-1280, and use sched-
+TPU chips. Here the experiments are run with and without la-
+ule L (with training time ~ 24 days) and policy LD to train
+bel smoothing. Not having a canonical development set, we
+the network to maximize performance. We turn label smooth-
+ choose to evaluate the checkpoint at the end point of the train-
+ing on for time steps <
+140k as noted before. The test set
+ing schedule, which we choose to be 100k steps for schedule B.
+performance is reported by evaluating the checkpoint with best
+We note that the training curve relaxes after the decay schedule
+ dev-other performance. State of the art performance is achieved
+is completed (step sf), and the performance of the network does
+by the LAS-6-1280 model, even without a language model. We
+not vary much. The performance of various augmentation poli-

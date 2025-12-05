@@ -100,19 +100,43 @@ def load_model(model_dir, nm, device_id: int | None = None):
     # Shrink GPU memory after execution
     run_options = ort.RunOptions()
     if cuda_is_available():
-        cuda_provider_options = {
-            "device_id": device_id, # Use specific GPU
-            "gpu_mem_limit": 512 * 1024 * 1024, # Limit gpu memory
-            "arena_extend_strategy": "kNextPowerOfTwo",  # gpu memory allocation strategy
-        }
-        sess = ort.InferenceSession(
-            model_file_path,
-            options=options,
-            providers=['CUDAExecutionProvider'],
-            provider_options=[cuda_provider_options]
-            )
-        run_options.add_run_config_entry("memory.enable_memory_arena_shrinkage", "gpu:" + str(device_id))
-        logging.info(f"load_model {model_file_path} uses GPU")
+        # Check if CUDA provider is actually available in ONNX Runtime
+        available_providers = ort.get_available_providers()
+        if 'CUDAExecutionProvider' in available_providers:
+            cuda_provider_options = {
+                "device_id": device_id, # Use specific GPU
+                "gpu_mem_limit": 512 * 1024 * 1024, # Limit gpu memory
+                "arena_extend_strategy": "kNextPowerOfTwo",  # gpu memory allocation strategy
+            }
+            try:
+                sess = ort.InferenceSession(
+                    model_file_path,
+                    options=options,
+                    providers=['CUDAExecutionProvider'],
+                    provider_options=[cuda_provider_options]
+                    )
+                # Only enable arena shrinkage if CUDA provider is successfully loaded
+                try:
+                    run_options.add_run_config_entry("memory.enable_memory_arena_shrinkage", "gpu:" + str(device_id))
+                except Exception as e:
+                    logging.warning(f"Failed to enable GPU memory arena shrinkage: {e}. Continuing without it.")
+                logging.info(f"load_model {model_file_path} uses GPU")
+            except Exception as e:
+                logging.warning(f"Failed to load model with CUDA provider: {e}. Falling back to CPU.")
+                sess = ort.InferenceSession(
+                    model_file_path,
+                    options=options,
+                    providers=['CPUExecutionProvider'])
+                run_options.add_run_config_entry("memory.enable_memory_arena_shrinkage", "cpu")
+                logging.info(f"load_model {model_file_path} uses CPU (fallback)")
+        else:
+            # CUDA provider not available, use CPU
+            sess = ort.InferenceSession(
+                model_file_path,
+                options=options,
+                providers=['CPUExecutionProvider'])
+            run_options.add_run_config_entry("memory.enable_memory_arena_shrinkage", "cpu")
+            logging.info(f"load_model {model_file_path} uses CPU (CUDA provider not available)")
     else:
         sess = ort.InferenceSession(
             model_file_path,
